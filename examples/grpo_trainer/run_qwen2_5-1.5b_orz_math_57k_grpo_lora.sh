@@ -40,7 +40,7 @@ python -m verl.trainer.main_ppo \
     algorithm.use_kl_in_reward=False \
     trainer.critic_warmup=0 \
     trainer.logger='["console","wandb"]' \
-    trainer.project_name='verl_grpo_example_orz_math_57k' \
+    trainer.project_name='verl_grpo_orz_math_57k' \
     trainer.experiment_name='qwen2.5_1.5b_grpo_lora' \
     trainer.n_gpus_per_node=2 \
     trainer.nnodes=1 \
