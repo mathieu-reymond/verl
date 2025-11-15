@@ -1,9 +1,9 @@
 set -x
-unset ROCR_VISIBLE_DEVICES
-unset HIP_VISIBLE_DEVICES
 
 python -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
+    actor_rollout_ref.actor.policy_loss.loss_mode=grpol \
+    algorithm.lam=0.99 \
     trainer.val_before_train=False \
     data.train_files=$HF_HOME/data/gsm8k/train.parquet \
     data.val_files=$HF_HOME/data/gsm8k/test.parquet \
@@ -13,7 +13,7 @@ python -m verl.trainer.main_ppo \
     data.filter_overlong_prompts=True \
     data.truncation='error' \
     data.shuffle=False \
-    actor_rollout_ref.model.path=Qwen/Qwen2.5-1.5B-Instruct \
+    actor_rollout_ref.model.path=deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
     actor_rollout_ref.model.lora_rank=64 \
     actor_rollout_ref.model.lora_alpha=32 \
     actor_rollout_ref.actor.optim.lr=3e-6 \
@@ -43,7 +43,7 @@ python -m verl.trainer.main_ppo \
     trainer.critic_warmup=0 \
     trainer.logger='["console","wandb"]' \
     trainer.project_name='verl_grpo_gsm8k' \
-    trainer.experiment_name='qwen2.5_1.5b_grpo_lora' \
+    trainer.experiment_name='deepseek_r1_distill_1.5b_grpol_lora' \
     trainer.n_gpus_per_node=2 \
     trainer.nnodes=1 \
     trainer.save_freq=20 \

@@ -1,4 +1,6 @@
 set -x
+unset ROCR_VISIBLE_DEVICES
+unset HIP_VISIBLE_DEVICES
 
 python -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
