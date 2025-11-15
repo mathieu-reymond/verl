@@ -361,6 +361,11 @@ class AlgoConfig(BaseConfig):
 
             For backward compatibility, you can still pass a dict, which will be converted to
             RolloutCorrectionConfig automatically.
+        style (str): Eligibility trace style for GRPO with traces: "both", "early", or "recent".
+            Uses existing `lam` parameter for trace decay.
+        update_style (str): Update style for GRPO with traces: "ppo" or "weight".
+        use_batch_max_for_trace (bool): Whether to use batch max length for trace computation.
+        adv_clamp (float): Clamp advantage values to this minimum for GRPO with traces.
     """
 
     gamma: float = 1.0
@@ -376,3 +381,8 @@ class AlgoConfig(BaseConfig):
     # Rollout Correction: corrects off-policy issues (policy mismatch, model staleness, distribution shifts)
     # Set to None to disable, use RolloutCorrectionConfig presets (e.g., .tis(), .mis()), or pass dict
     rollout_correction: Optional[RolloutCorrectionConfig] = None
+    # GRPO with traces (GRPOL) parameters - reuses existing gamma and lam
+    style: str = "both"  # Trace style: "both", "early", or "recent"
+    update_style: str = "ppo"  # Update style: "ppo" or "weight"
+    use_batch_max_for_trace: bool = True  # Use batch max length for trace computation
+    adv_clamp: float = -float("inf")  # Minimum value for clamping advantages

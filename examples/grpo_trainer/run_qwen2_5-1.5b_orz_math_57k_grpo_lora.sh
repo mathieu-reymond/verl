@@ -5,7 +5,7 @@ python -m verl.trainer.main_ppo \
     trainer.val_before_train=False \
     data.train_files=$HF_HOME/data/orz_math_57k/train.parquet \
     data.val_files=$HF_HOME/data/orz_math_57k/test.parquet \
-    data.train_batch_size=8 \
+    data.train_batch_size=64 \
     data.max_prompt_length=512 \
     data.max_response_length=3072 \
     data.filter_overlong_prompts=True \
@@ -16,7 +16,7 @@ python -m verl.trainer.main_ppo \
     actor_rollout_ref.model.lora_alpha=32 \
     actor_rollout_ref.actor.optim.lr=3e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
-    actor_rollout_ref.actor.ppo_mini_batch_size=8 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=64 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=32 \
     actor_rollout_ref.actor.use_kl_loss=True \
     actor_rollout_ref.actor.kl_loss_coef=0.001 \
@@ -41,7 +41,7 @@ python -m verl.trainer.main_ppo \
     trainer.critic_warmup=0 \
     trainer.logger='["console","wandb"]' \
     trainer.project_name='verl_grpo_orz_math_57k' \
-    trainer.experiment_name='qwen2.5_1.5b_grpo_lora' \
+    trainer.experiment_name='qwen2.5_1.5b_grpo_lora_64' \
     trainer.n_gpus_per_node=2 \
     trainer.nnodes=1 \
     trainer.save_freq=20 \

@@ -116,6 +116,15 @@ algorithm:
     # Power used for weight scaling in "pow" method
     weight_pow: 2.0
 
+# recent, both or early: used for grpol trace
+style: recent
+
+# ppo or weight: used for grpol update
+update_style: ppo
+
+# advantage clipping value
+adv_clamp: -1000
+
 # config for the trainer
 trainer:
 

@@ -2,6 +2,8 @@ set -x
 
 python -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
+    actor_rollout_ref.actor.policy_loss.loss_mode=grpol \
+    algorithm.lam=0.99 \
     trainer.val_before_train=False \
     data.train_files=$HF_HOME/data/math-rl-16k/train.parquet \
     data.val_files=$HF_HOME/data/math-rl-16k/test.parquet \
@@ -41,7 +43,7 @@ python -m verl.trainer.main_ppo \
     trainer.critic_warmup=0 \
     trainer.logger='["console","wandb"]' \
     trainer.project_name='verl_grpo_math_rl_16k' \
-    trainer.experiment_name='qwen2.5_1.5b_grpo_lora_64' \
+    trainer.experiment_name='qwen2.5_1.5b_grpol_lora_64' \
     trainer.n_gpus_per_node=2 \
     trainer.nnodes=1 \
     trainer.save_freq=20 \

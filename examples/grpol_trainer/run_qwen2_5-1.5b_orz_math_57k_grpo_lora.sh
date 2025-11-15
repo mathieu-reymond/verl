@@ -2,9 +2,11 @@ set -x
 
 python -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
+    actor_rollout_ref.actor.policy_loss.loss_mode=grpol \
+    algorithm.lam=0.99 \
     trainer.val_before_train=False \
-    data.train_files=$HF_HOME/data/math-rl-16k/train.parquet \
-    data.val_files=$HF_HOME/data/math-rl-16k/test.parquet \
+    data.train_files=$HF_HOME/data/orz_math_57k/train.parquet \
+    data.val_files=$HF_HOME/data/orz_math_57k/test.parquet \
     data.train_batch_size=64 \
     data.max_prompt_length=512 \
     data.max_response_length=3072 \
@@ -34,14 +36,14 @@ python -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.n=8 \
     actor_rollout_ref.rollout.load_format=safetensors \
     actor_rollout_ref.rollout.layered_summon=True \
-    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=64 \
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=32 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     actor_rollout_ref.ref.fsdp_config.model_dtype=bf16 \
     algorithm.use_kl_in_reward=False \
     trainer.critic_warmup=0 \
     trainer.logger='["console","wandb"]' \
-    trainer.project_name='verl_grpo_math_rl_16k' \
-    trainer.experiment_name='qwen2.5_1.5b_grpo_lora_64' \
+    trainer.project_name='verl_grpo_orz_math_57k' \
+    trainer.experiment_name='qwen2.5_1.5b_grpol_lora_64' \
     trainer.n_gpus_per_node=2 \
     trainer.nnodes=1 \
     trainer.save_freq=20 \

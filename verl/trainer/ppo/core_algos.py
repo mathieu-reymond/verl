@@ -209,6 +209,96 @@ def get_kl_controller(kl_ctrl):
         raise NotImplementedError
 
 
+def compute_eligibility_trace(
+    n: int,
+    gamma: float,
+    lam: float,
+    style: str = "both",
+    max_length: Optional[int] = None,
+    device: Optional[torch.device] = None,
+    dtype: torch.dtype = torch.float32,
+) -> torch.Tensor:
+    """
+    Create a lower triangular tensor with eligibility traces for GRPO.
+
+    This function implements the eligibility trace computation from the GRPOL paper,
+    which uses traces to weight the contribution of each token to the policy gradient.
+
+    Args:
+        n (int): The size of the sequence (number of tokens).
+        gamma (float): The gamma discount parameter.
+        lam (float): The lambda trace decay parameter.
+        style (str): The trace style - "both", "early", or "recent".
+            - "both": Combines early and recent traces
+            - "early": Weights earlier tokens more
+            - "recent": Weights more recent tokens more
+        max_length (int, optional): The maximum padding length. If None, uses n.
+        device (torch.device, optional): Device for the tensor.
+        dtype (torch.dtype): Data type for the tensor. Default: torch.float32
+
+    Returns:
+        torch.Tensor: The padded lower triangular tensor of shape (max_length, max_length).
+
+    Example:
+    ```python
+    >>> trace = compute_eligibility_trace(n=4, gamma=0.99, lam=0.95, style="both")
+    >>> trace.shape
+    torch.Size([4, 4])
+    ```
+    """
+    if max_length is None:
+        max_length = n
+    if device is None:
+        device = torch.device("cpu")
+
+    # Create a full lower triangular index set
+    rows, cols = torch.tril_indices(n, n, device=device)
+
+    # Initialize the padded tensor
+    tensor = torch.zeros((max_length, max_length), device=device, dtype=dtype)
+
+    # Compute values for the lower triangular part
+    if style == "both":
+        # Combine both early and recent weighting
+        values = torch.where(
+            rows == cols,
+            torch.ones_like(rows, dtype=dtype, device=device),
+            torch.max(
+                torch.max(
+                    torch.tensor(1e-7, dtype=dtype, device=device),
+                    (gamma * lam) ** (n - cols)
+                ),
+                (gamma * lam) ** cols
+            )
+        )
+    elif style == "early":
+        # Weight earlier tokens more
+        values = torch.where(
+            rows == cols,
+            torch.ones_like(rows, dtype=dtype, device=device),
+            torch.max(
+                torch.tensor(1e-7, dtype=dtype, device=device),
+                (gamma * lam) ** cols
+            )
+        )
+    elif style == "recent":
+        # Weight more recent tokens more
+        max_cols = torch.max(cols) if len(cols) > 0 else torch.tensor(0, device=device)
+        values = torch.where(
+            rows == cols,
+            torch.ones_like(rows, dtype=dtype, device=device),
+            torch.max(
+                torch.tensor(1e-7, dtype=dtype, device=device),
+                (gamma * lam) ** (max_cols - cols)
+            )
+        )
+    else:
+        raise ValueError(f"Invalid style: {style}. Must be one of 'both', 'early', or 'recent'.")
+
+    tensor[:n, :n][rows, cols] = values
+    return tensor
+
+
 @register_adv_est(AdvantageEstimator.GAE)  # or simply: @register_adv_est("gae")
 def compute_gae_advantage_return(
     token_level_rewards: torch.Tensor,
@@ -1752,3 +1842,162 @@ def compute_policy_loss_rollout_correction_wrapper(
         rollout_token_veto_threshold=rollout_token_veto_threshold,
         rollout_is_batch_normalize=rollout_is_batch_normalize,
     )
+
+
+@register_policy_loss("grpol")
+def compute_policy_loss_grpol(
+    old_log_prob: torch.Tensor,
+    log_prob: torch.Tensor,
+    advantages: torch.Tensor,
+    response_mask: torch.Tensor,
+    loss_agg_mode: str = "token-mean",
+    config: Optional[DictConfig | AlgoConfig] = None,
+    rollout_is_weights: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    """
+    Compute policy loss for GRPOL (GRPO with eligibility traces).
+
+    This implements the trace-based loss from the open-r1 modification of GRPO,
+    which uses eligibility traces to weight token contributions to the policy gradient.
+
+    Based on the implementation from:
+    https://github.com/huggingface/open-r1/blob/main/src/open_r1/trainer/grpol_trainer.py
+
+    Args:
+        old_log_prob (torch.Tensor):
+            Log-probabilities of actions under the old policy, shape (batch_size, response_length).
+        log_prob (torch.Tensor):
+            Log-probabilities of actions under the current policy, shape (batch_size, response_length).
+        advantages (torch.Tensor):
+            Advantage estimates for each action, shape (batch_size, response_length).
+        response_mask (torch.Tensor):
+            Mask indicating which tokens to include in the loss, shape (batch_size, response_length).
+        loss_agg_mode (str, optional):
+            Aggregation mode for `agg_loss`. Defaults to "token-mean".
+        config (Optional[DictConfig | AlgoConfig]):
+            Configuration containing trace parameters (gamma, lamda, style, update_style, etc.)
+        rollout_is_weights (torch.Tensor | None):
+            Pre-computed importance sampling weights (if any)
+
+    Returns:
+        tuple[torch.Tensor, dict[str, Any]]: Policy loss and metrics dictionary
+    """
+    assert config is not None, "config is required for grpol loss mode"
+
+    # Extract trace configuration parameters
+    gamma = config.get("gamma", 1.0)
+    lam = config.get("lam", 0.0)  # falls back to GRPO if no `lam` is specified
+    style = config.get("style", "recent")
+    update_style = config.get("update_style", "ppo")
+    adv_clamp = config.get("adv_clamp", -float('inf')) # No clamping by default
+    use_batch_max_for_trace = config.get("use_batch_max_for_trace", True)
+    clip_ratio = config.get("clip_ratio", 0.2)
+    clip_ratio_low = config.get("clip_ratio_low", clip_ratio)
+    clip_ratio_high = config.get("clip_ratio_high", clip_ratio)
+    beta = config.get("beta", 0.0)  # KL coefficient
+
+    # Clamp advantages
+    advantages_clamped = advantages.clamp(min=adv_clamp)
+
+    # Get sequence lengths from response_mask
+    length = response_mask.sum(dim=1)  # (batch_size,)
+    max_seq_length = log_prob.shape[1]  # Actual sequence length in the batch
+
+    device = log_prob.device
+    dtype = log_prob.dtype
+
+    # Compute eligibility traces
+    if use_batch_max_for_trace:
+        # Use the same max length for all sequences in the batch
+        # Use the actual tensor dimension, not the mask sum
+        trace = compute_eligibility_trace(
+            n=max_seq_length,
+            gamma=gamma,
+            lam=lam,
+            style=style,
+            max_length=max_seq_length,
+            device=device,
+            dtype=dtype
+        )
+        # Expand to batch dimension: (batch_size, max_seq_length, max_seq_length)
+        trace = trace.unsqueeze(0).expand(log_prob.shape[0], -1, -1)
+    else:
+        # Compute individual traces for each sequence based on actual token count
+        traces = []
+        for seq_len in length:
+            seq_len_int = int(seq_len.item())
+            if seq_len_int == 0:
+                seq_len_int = 1  # Avoid zero-length sequences
+            t = compute_eligibility_trace(
+                n=seq_len_int,
+                gamma=gamma,
+                lam=lam,
+                style=style,
+                max_length=max_seq_length,
+                device=device,
+                dtype=dtype
+            )
+            traces.append(t)
+        trace = torch.stack(traces, dim=0)  # (batch_size, max_seq_length, max_seq_length)
+
+    # Compute ratios
+    negative_approx_kl = log_prob - old_log_prob
+    # Clamp for stability
+    negative_approx_kl = torch.clamp(negative_approx_kl, min=-20.0, max=20.0)
+    ratio = torch.exp(negative_approx_kl)
+    ppo_kl = verl_F.masked_mean(-negative_approx_kl, response_mask)
+
+    # Apply eligibility traces to log probabilities based on update_style
+    if update_style == "ppo":
+        # Apply trace to log probabilities before computing ratio
+        # per_token_logps = trace @ per_token_logps
+        per_token_logps = torch.bmm(trace, log_prob.unsqueeze(-1)).squeeze(-1)
+        old_per_token_logps = torch.bmm(trace, old_log_prob.unsqueeze(-1)).squeeze(-1)
+
+        # Recompute ratio with traced log probs
+        traced_ratio = torch.exp(per_token_logps - old_per_token_logps)
+        
+        # PPO clipping with traced ratios
+        pg_losses1 = -advantages_clamped * traced_ratio
+        pg_losses2 = -advantages_clamped * torch.clamp(
+            traced_ratio, 1 - clip_ratio_low, 1 + clip_ratio_high
+        )
+        pg_losses = torch.max(pg_losses1, pg_losses2)
+        
+    elif update_style == "weight":
+        # Weight the loss by eligibility
+        # First compute per-token cumulative log prob with sigmoid
+        per_token_logps_cumsum = 1 + torch.sigmoid(log_prob - 1)
+        
+        # Apply trace to get eligibility weights
+        eligibility = torch.bmm(trace, per_token_logps_cumsum.unsqueeze(-1)).squeeze(-1)
+        
+        # Standard PPO loss
+        pg_losses1 = -advantages_clamped * ratio
+        pg_losses2 = -advantages_clamped * torch.clamp(
+            ratio, 1 - clip_ratio_low, 1 + clip_ratio_high
+        )
+        per_token_error = torch.max(pg_losses1, pg_losses2)
+        
+        # Weight by eligibility
+        pg_losses = eligibility * per_token_error
+    else:
+        raise ValueError(f"Invalid update_style: {update_style}. Must be 'ppo' or 'weight'.")
+
+    # Compute clip fraction
+    pg_clipfrac = verl_F.masked_mean(torch.gt(pg_losses2, pg_losses1).float(), response_mask)
+
+    # Apply rollout correction weights if provided
+    if rollout_is_weights is not None:
+        pg_losses = pg_losses * rollout_is_weights
+
+    # Aggregate loss
+    pg_loss = agg_loss(loss_mat=pg_losses, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
+
+    pg_metrics = {
+        "actor/pg_clipfrac": pg_clipfrac.detach().item(),
+        "actor/ppo_kl": ppo_kl.detach().item(),
+    }
+
+    return pg_loss, pg_metrics
+
